@@ -68,9 +68,30 @@ body <- dashboardBody(
       
       # row: title
       h1("Historical Statistics", align = "center"),
+      
+      # spacing
+      br(),
+      br(),
 
       # row: opts
       fluidRow(
+        
+        # col: opts
+        column(
+          
+          # opts
+          radioButtons(inputId = "sumHistOptsSeries",
+            label = h4("Series:"),
+            choices = str_to_title(colnames(trend_agg)[-1]),
+            selected = last(str_to_title(colnames(trend_agg)[-1])),
+            inline = TRUE
+          ),
+          
+          # settings
+          width = 6,
+          align = "center"
+          
+        ),
         
         # col: opts
         column(
@@ -88,15 +109,12 @@ body <- dashboardBody(
             inline = TRUE
           ),
           
-          # spacing
-          br(),
-
           # settings
-          width = 12,
+          width = 6,
           align = "center"
           
         )
-                
+        
       ),
       
       # row: plot
@@ -134,11 +152,32 @@ body <- dashboardBody(
         # col: stats
         column(
       
+          # plot
+          echarts4rOutput(
+            outputId = "sumHistStatsShare",
+            height = 350
+          ),
+
+          # settings
+          width = 8,
+          align = "center"
+      
+        ),
+      
+        # col: stats
+        column(
+          
+          # spacing
+          br(),
+          br(),
+          br(),
+      
           # box
-          valueBoxOutput("sumHistStats", width = NULL),
+          valueBoxOutput("sumHistStatsCum", width = NULL),
+          valueBoxOutput("sumHistStatsGrowth", width = NULL),
       
           # settings
-          width = 12,
+          width = 4,
           align = "center"
       
         )

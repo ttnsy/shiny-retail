@@ -12,12 +12,6 @@ library(htmlwidgets)
 
 # import graph libs
 library(echarts4r)
-library(leaflet)
-
-# import table libs
-library(DT)
-library(readxl)
-library(writexl)
 
 # import data wrangling libs
 library(lubridate)

@@ -4,24 +4,47 @@ function(input, output, session) {
 
 # summary ----------------------------------------------------------------------
 
-  # initiate reactives
-  sumRvs <- reactiveValues()
+  # trend: get data
+  sumHistRv <- reactive({
+    
+    # get opts
+    optsAgg <- input$sumHistOptsAgg
+    optsSeries <- str_to_lower(input$sumHistOptsSeries)
+    
+    # data wrangling
+    trend %>%
+      select_("datetime", "country", optsSeries) %>%
+      mutate(datetime = case_when(
+        optsAgg == "day" ~ floor_date(datetime, optsAgg) %>% as.Date(),
+        TRUE ~ (ceiling_date(datetime, optsAgg) %>% as.Date()) - days(1),
+      )) %>%
+      group_by(datetime, country) %>%
+      summarise_at(vars(-datetime, -country), funs(sum(.))) %>%
+      ungroup() %>%
+      gather(key, value, -datetime, -country) %>%
+      mutate(
+        country = str_to_title(country),
+        key = str_to_title(key),
+        value = ifelse(value == 0, NA, value)
+      ) %>%
+      drop_na()
+    
+  })
 
   # trend: get data
   sumHistAggRv <- reactive({
     
     # get opts
-    opts <- input$sumHistOptsAgg
+    optsAgg <- input$sumHistOptsAgg
+    optsSeries <- str_to_lower(input$sumHistOptsSeries)
     
     # data wrangling
     trend_agg %>%
-      select_("datetime", "quantity") %>%
-      group_by(
-        datetime = case_when(
-          opts == "day" ~ floor_date(datetime, opts) %>% as.Date(),
-          TRUE ~ (ceiling_date(datetime, opts) %>% as.Date()) - days(1),
-        )
-      ) %>%
+      select_("datetime", optsSeries) %>%
+      group_by(datetime = case_when(
+        optsAgg == "day" ~ floor_date(datetime, optsAgg) %>% as.Date(),
+        TRUE ~ (ceiling_date(datetime, optsAgg) %>% as.Date()) - days(1),
+      )) %>%
       summarise_at(vars(-datetime), funs(sum(.))) %>%
       ungroup() %>%
       gather(key, value, -datetime) %>%
@@ -38,14 +61,13 @@ function(input, output, session) {
     
     # data
     data <- sumHistAggRv() %>%
-      mutate(value = value / 1000)
+      mutate(datetime = format(datetime, "%b %e, %y"))
     
     # chart
     data %>%
       group_by(key) %>%
       e_chart(datetime) %>%
       e_line(value) %>%
-      e_format_y_axis(suffix = "K") %>%
       e_legend(show = FALSE) %>%
       e_tooltip("axis") %>%
       e_datazoom(type = "inside") %>%
@@ -55,60 +77,77 @@ function(input, output, session) {
   })
   
   # trend: plot events
-  observe({
-  
+  sumHistDateSelected <- reactive({
+    
+    # available dates
+    availDates <- sumHistAggRv() %>% pull(datetime)
+    
     # trend: date selected
     if (is.null(input$sumHistPlot_clicked_row))
       
-      sumRvs$histDateSelected <- nrow(sumHistAggRv())
+      selectedDate <- last(availDates)
     
     else
     
-      sumRvs$histDateSelected <- input$sumHistPlot_clicked_row
-  
-  })
-  
-  # trend: plot update
-  observeEvent(sumHistAggRv(), {
-  
-    # trend: date selected
-    sumRvs$histDateSelected <- nrow(sumHistAggRv())
-  
+      selectedDate <- availDates[input$sumHistPlot_clicked_row]
+      
+    # handle data change
+    if (!(selectedDate %in% availDates)) selectedDate <- last(availDates)
+    
+    # return selected date
+    selectedDate
+    
   })
   
   # trend: selected statistics title
   output$sumHistStatsTitle <- renderText({
     
-    availDates <- sumHistAggRv() %>% pull(datetime)
+    selectedDate <- format(sumHistDateSelected(), "%B %e, %Y")
     
-    selectedDate <- format(availDates[sumRvs$histDateSelected], "%b %e, %Y")
-    
-    paste("Statistics as of", selectedDate)
+    paste("Summary Statistics as of", selectedDate)
     
   })
   
+  # trend: plot
+  output$sumHistStatsShare <- renderEcharts4r({
+  
+    # data
+    data <- sumHistRv() %>%
+      filter(datetime == sumHistDateSelected())
+  
+    # chart
+    data %>%
+      group_by(key) %>%
+      e_chart(country) %>%
+      e_bar(value) %>%
+      e_flip_coords() %>%
+      e_legend(show = FALSE) %>%
+      e_tooltip("axis") %>%
+      e_toolbox(show = FALSE) %>%
+      e_theme("westeros")
+  
+  })
+  
   # trend: selected statistics
-  output$sumHistStats <- renderValueBox({
+  output$sumHistStatsCum <- renderValueBox({
   
     # data
     data <- sumHistAggRv()
   
     # opts
-    opts <- input$sumHistOptsAgg
-  
-    # available dates
-    availDates <- data$datetime
+    optsAgg <- input$sumHistOptsAgg
+    optsSeries <- input$sumHistOptsSeries
   
     # selected date
-    dateNow <- availDates[sumRvs$histDateSelected]
+    dateNow <- sumHistDateSelected()
   
-    # handle change in data
-    if (!(dateNow %in% data$datetime)) {
+    # handle choosed data
+    if (dateNow == first(data$datetime)) {
   
       obj <- valueBox(
         value = "-",
-        subtitle = "No date selected",
-        color = "light-blue",
+        subtitle = "Choose more recent date",
+        color = "yellow",
         icon = icon("exclamation-circle")
       )
   
@@ -116,12 +155,55 @@ function(input, output, session) {
   
     }
   
+    # cumulative sum
+    cum <- sumHistAggRv() %>%
+      filter(
+        year(datetime) == year(dateNow),
+        datetime <= dateNow
+      ) %>%
+      pull(value) %>%
+      sum()
+    
+    # value
+    value <- case_when(
+      (cum / 1e8) >= 1 ~ paste(round(cum / 1e9, 2), "B"),
+      (cum / 1e5) >= 1 ~ paste(round(cum / 1e6, 2), "M"),
+      (cum / 1e2) >= 1 ~ paste(round(cum / 1e3, 2), "K"),
+      TRUE ~ paste(cum)
+    )
+    
+    # handle currency
+    value <- case_when(
+      optsSeries == "Amount" ~ paste("$", value),
+      TRUE ~ paste(value)
+    )
+  
+    # render box
+    valueBox(
+      value = value,
+      subtitle = "Cumulative Sum",
+      color = "light-blue"
+    )
+  
+  })
+  # trend: selected statistics
+  output$sumHistStatsGrowth <- renderValueBox({
+  
+    # data
+    data <- sumHistAggRv()
+  
+    # opts
+    optsAgg <- input$sumHistOptsAgg
+  
+    # selected date
+    dateNow <- sumHistDateSelected()
+  
     # handle choosed data
-    if (dateNow == min(data$datetime)) {
+    if (dateNow == first(data$datetime)) {
   
       obj <- valueBox(
         value = "-",
-        subtitle = "Please choose more recent date",
+        subtitle = "Choose more recent date",
         color = "yellow",
         icon = icon("exclamation-circle")
       )
@@ -131,7 +213,7 @@ function(input, output, session) {
     }
   
     # previous date
-    datePrev <- availDates[sumRvs$histDateSelected - 1]
+    datePrev <- data$datetime[which(data$datetime == dateNow) - 1]
   
     # values
     vals <- sumHistAggRv() %>%
@@ -149,14 +231,14 @@ function(input, output, session) {
     )
   
     # subtitle
-    boxSubtitle <- case_when(
-      growth > 0 ~ paste0(str_to_title(opts), "-to-", str_to_title(opts)),
-      growth < 0 ~ paste0(str_to_title(opts), "-to-", str_to_title(opts)),
+    subtitle <- case_when(
+      growth > 0 ~ paste0(str_to_title(optsAgg), "-to-", str_to_title(optsAgg)),
+      growth < 0 ~ paste0(str_to_title(optsAgg), "-to-", str_to_title(optsAgg)),
       TRUE ~ "Can't calculate selected date"
     )
   
     # color
-    boxColor <- case_when(
+    color <- case_when(
       growth > 0 ~ "green",
       growth < 0 ~ "red",
       TRUE ~ "yellow"
@@ -172,8 +254,8 @@ function(input, output, session) {
     # render box
     valueBox(
       value = value,
-      subtitle = boxSubtitle,
-      color = boxColor,
+      subtitle = subtitle,
+      color = color,
       icon = icon(boxIcon)
     )
   
